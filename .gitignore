@@ -12,3 +12,5 @@ build/
 .DS_Store
 *.db
 *.sqlite
+credentials.json
+token.json

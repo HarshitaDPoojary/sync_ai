@@ -21,6 +21,7 @@ class MeetingRepository:
         title: str,
         platform_url: str,
         recall_bot_id: str,
+        slack_channel_id: Optional[str] = None,
     ) -> Meeting:
         with _session(self._engine) as session:
             meeting = Meeting(
@@ -29,6 +30,7 @@ class MeetingRepository:
                 platform_url=platform_url,
                 status="active",
                 recall_bot_id=recall_bot_id,
+                slack_channel_id=slack_channel_id,
             )
             session.add(meeting)
             session.commit()

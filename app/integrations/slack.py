@@ -1,7 +1,6 @@
 from typing import Any, Dict, List
 
 from slack_sdk import WebClient
-from slack_sdk.web.async_client import AsyncWebClient
 
 from app.core.config import get_settings
 
@@ -11,7 +10,6 @@ class SlackClient:
         settings = get_settings()
         token = bot_token or settings.slack_bot_token
         self._channel = channel_id or settings.slack_channel_id
-        self._async_client = AsyncWebClient(token=token)
         self._sync_client = WebClient(token=token)
 
     def _format_action_items(self, meeting_title: str, items: List[Dict[str, Any]]) -> str:
@@ -39,23 +37,9 @@ class SlackClient:
             sections.append("*Next Steps:*\n" + "\n".join(f"• {s}" for s in next_steps))
         return "\n\n".join(sections)
 
-    async def send_action_items(self, meeting_title: str, items: List[Dict[str, Any]]) -> None:
-        text = self._format_action_items(meeting_title, items)
-        await self._async_client.chat_postMessage(channel=self._channel, text=text)
-
     def send_action_items_sync(self, meeting_title: str, items: List[Dict[str, Any]]) -> None:
         text = self._format_action_items(meeting_title, items)
         self._sync_client.chat_postMessage(channel=self._channel, text=text)
-
-    async def send_summary(
-        self,
-        meeting_title: str,
-        decisions: List[str],
-        blockers: List[str],
-        next_steps: List[str],
-    ) -> None:
-        text = self._format_summary(meeting_title, decisions, blockers, next_steps)
-        await self._async_client.chat_postMessage(channel=self._channel, text=text)
 
     def send_summary_sync(
         self,

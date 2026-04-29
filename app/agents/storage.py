@@ -1,4 +1,4 @@
-import uuid
+import hashlib
 from typing import Any, Optional
 
 from app.core.graph import MeetingState
@@ -38,8 +38,11 @@ def run_storage_node(
 
         for item in state["action_items"]:
             embedding = embedder.embed_documents([item["task"]])[0]
+            item_id = hashlib.sha256(
+                f"{state['meeting_id']}:{item['task']}".encode()
+            ).hexdigest()[:32]
             chroma_collection.upsert(
-                ids=[str(uuid.uuid4())],
+                ids=[item_id],
                 embeddings=[embedding],
                 documents=[item["task"]],
                 metadatas=[{

@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     # App
     webhook_base_url: str = "http://localhost:8000"
+    recall_webhook_secret: str = ""  # shared secret for Recall.ai webhook HMAC verification
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_level: str = "info"

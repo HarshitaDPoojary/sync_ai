@@ -1,5 +1,8 @@
+import asyncio
 import functools
 import os
+import threading
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import chromadb
@@ -15,6 +18,11 @@ from app.core.recall import RecallClient
 from app.models.db import get_engine
 
 
+@lru_cache(maxsize=1)
+def _get_chroma_client(persist_dir: str) -> chromadb.PersistentClient:
+    return chromadb.PersistentClient(path=persist_dir)
+
+
 class MeetingSession:
     def __init__(
         self,
@@ -24,6 +32,7 @@ class MeetingSession:
         participant_emails: List[str],
         recall_api_key: Optional[str] = None,
         webhook_base_url: Optional[str] = None,
+        slack_channel_id: Optional[str] = None,
     ):
         settings = get_settings()
         self.meeting_id = meeting_id
@@ -34,9 +43,11 @@ class MeetingSession:
 
         self._recall = RecallClient(api_key=recall_api_key)
         self._webhook_base_url = webhook_base_url or settings.webhook_base_url
+        self._slack_channel_id = slack_channel_id
         self._engine = get_engine()
+        self._lock = threading.Lock()
 
-        chroma_client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
+        chroma_client = _get_chroma_client(settings.chroma_persist_dir)
         self._chroma = chroma_client.get_or_create_collection("transcripts")
         self._embedder = HuggingFaceEmbeddings(model_name=settings.embedding_model)
 
@@ -46,7 +57,11 @@ class MeetingSession:
         self._graph = build_graph(
             analysis_node=run_analysis_node,
             extraction_node=run_extraction_node,
-            delivery_node=functools.partial(run_delivery_node, meeting_title=title),
+            delivery_node=functools.partial(
+                run_delivery_node,
+                meeting_title=title,
+                slack_channel_id=slack_channel_id,
+            ),
             storage_node=functools.partial(
                 run_storage_node,
                 engine=self._engine,
@@ -69,33 +84,37 @@ class MeetingSession:
                 await self._recall.remove_bot(self.bot_id)
             except Exception:
                 pass
-        self._state["meeting_ended"] = True
-        self._run_graph()
+        with self._lock:
+            self._state["meeting_ended"] = True
+        await asyncio.get_running_loop().run_in_executor(None, self._run_graph)
 
     def ingest_chunk(self, speaker: str, text: str, timestamp: float) -> None:
-        seq = len(self._state["transcript_chunks"]) + 1
-        chunk = TranscriptChunk(speaker=speaker, text=text, timestamp=timestamp, sequence_num=seq)
+        with self._lock:
+            seq = len(self._state["transcript_chunks"]) + 1
+            chunk = TranscriptChunk(speaker=speaker, text=text, timestamp=timestamp, sequence_num=seq)
 
-        settings = get_settings()
-        tokens = len(text.split())
-        cutoff_time = timestamp - settings.analysis_window_seconds
-        window = [
-            c for c in self._state["transcript_chunks"] if c["timestamp"] >= cutoff_time
-        ] + [chunk]
+            settings = get_settings()
+            tokens = len(text.split())
+            cutoff_time = timestamp - settings.analysis_window_seconds
+            window = [
+                c for c in self._state["transcript_chunks"] if c["timestamp"] >= cutoff_time
+            ] + [chunk]
 
-        self._state = {
-            **self._state,
-            "transcript_chunks": self._state["transcript_chunks"] + [chunk],
-            "analysis_window": window,
-            "token_count": self._state["token_count"] + tokens,
-        }
+            chunks = self._state["transcript_chunks"]
+            chunks.append(chunk)
+            self._state = {
+                **self._state,
+                "transcript_chunks": chunks,
+                "analysis_window": window,
+                "token_count": self._state["token_count"] + tokens,
+            }
 
-        if should_analyze(self._state):
-            self._run_graph()
+            if should_analyze(self._state):
+                self._run_graph()
 
     def _run_graph(self) -> None:
         result = self._graph.invoke(self._state)
         self._state = result
 
     def get_state(self) -> MeetingState:
-        return self._state
+        return dict(self._state)

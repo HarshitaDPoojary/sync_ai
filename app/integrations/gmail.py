@@ -11,6 +11,8 @@ from app.core.config import get_settings
 
 def _get_gmail_service():
     settings = get_settings()
+    if not settings.gmail_credentials_json:
+        return None
     creds_json = json.loads(base64.b64decode(settings.gmail_credentials_json).decode())
     creds = Credentials.from_authorized_user_info(creds_json)
     return build("gmail", "v1", credentials=creds)
@@ -25,6 +27,8 @@ class GmailClient:
         items: List[Dict[str, Any]],
     ) -> None:
         service = _get_gmail_service()
+        if service is None:
+            return
         lines = [f"Hi {owner_name},\n\nYour action items from '{meeting_title}':\n"]
         for item in items:
             deadline = item.get("deadline") or "No deadline"

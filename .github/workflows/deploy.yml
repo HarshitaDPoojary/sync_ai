@@ -1,13 +1,15 @@
 name: Deploy to Render
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+    branches: [master, main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    needs: []
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 10
 
     steps:

@@ -36,10 +36,9 @@ def test_search_returns_relevant_chunk(case):
         mock_vs.similarity_search.return_value = [mock_doc]
         MockChroma.return_value = mock_vs
 
-        from app.core import search as search_module
-        search_module._search_chain_cache = None
+        from app.core.search import _get_vectorstore, search_transcripts
+        _get_vectorstore.cache_clear()
 
-        from app.core.search import search_transcripts
         results = search_transcripts(case["query"], chroma_persist_dir="/tmp/test_chroma", limit=3)
 
     assert len(results) > 0, f"No results for: {case['query']}"

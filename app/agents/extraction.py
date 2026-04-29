@@ -1,3 +1,5 @@
+import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -8,26 +10,21 @@ from langchain_groq import ChatGroq
 from app.core.config import get_settings
 from app.core.graph import ExtractedActionItem, MeetingState
 
-_extraction_chain_cache = None
+logger = logging.getLogger("sync_ai.extraction")
+
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 
-def get_extraction_chain():
-    global _extraction_chain_cache
-    if _extraction_chain_cache is None:
-        settings = get_settings()
-        prompt_text = (_PROMPTS_DIR / "extraction_system.txt").read_text()
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", prompt_text),
-            ("human", "{full_transcript}"),
-        ])
-        llm = ChatGroq(
-            model=settings.groq_model,
-            temperature=settings.groq_extraction_temperature,
-            api_key=settings.groq_api_key,
-        )
-        _extraction_chain_cache = prompt | llm | JsonOutputParser()
-    return _extraction_chain_cache
+@lru_cache(maxsize=4)
+def get_extraction_chain(model: str, temperature: float):
+    prompt_text = (_PROMPTS_DIR / "extraction_system.txt").read_text()
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", prompt_text),
+        ("human", "{full_transcript}"),
+    ])
+    settings = get_settings()
+    llm = ChatGroq(model=model, temperature=temperature, api_key=settings.groq_api_key)
+    return prompt | llm | JsonOutputParser()
 
 
 def _verify_quote(quote: str, transcript: str) -> bool:
@@ -42,11 +39,21 @@ def run_extraction_node(state: MeetingState) -> MeetingState:
     full_transcript = "\n".join(f"{c['speaker']}: {c['text']}" for c in chunks)
     email_map = {p["name"].lower(): p.get("email") for p in state["participants"]}
 
-    chain = get_extraction_chain()
-    result = chain.invoke({"full_transcript": full_transcript})
+    settings = get_settings()
+    chain = get_extraction_chain(settings.groq_model, settings.groq_extraction_temperature)
+    try:
+        result = chain.invoke({"full_transcript": full_transcript})
+    except Exception as exc:
+        logger.warning("extraction_chain_failed error=%s", exc)
+        return state
 
+    # Re-extract over the full transcript each checkpoint — replace, don't append,
+    # to avoid duplicating items that were already found in an earlier checkpoint.
     action_items = []
     for item in result.get("action_items", []):
+        if not item.get("task"):
+            logger.debug("extraction_skipped_missing_task item=%s", item)
+            continue
         quote = item.get("supporting_quote", "")
         needs_review = not _verify_quote(quote, full_transcript)
         owner_name = item.get("owner_name")
@@ -64,7 +71,7 @@ def run_extraction_node(state: MeetingState) -> MeetingState:
     summary = result.get("summary", {})
     return {
         **state,
-        "action_items": state["action_items"] + action_items,
+        "action_items": action_items,  # replace, not append — extraction is over full transcript
         "summary": summary,
         "last_checkpoint_chunk_count": len(chunks),
     }

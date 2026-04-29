@@ -1,49 +1,33 @@
+from functools import lru_cache
 from typing import Any, Dict, List
 
-from langchain.chains import RetrievalQA
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
 
 from app.core.config import get_settings
 
-_search_chain_cache = None
 
-
-def get_search_chain() -> RetrievalQA:
-    global _search_chain_cache
-    if _search_chain_cache is None:
-        settings = get_settings()
-        embeddings = HuggingFaceEmbeddings(model_name=settings.embedding_model)
-        vectorstore = Chroma(
-            collection_name="transcripts",
-            embedding_function=embeddings,
-            persist_directory=settings.chroma_persist_dir,
-        )
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-        llm = ChatGroq(
-            model=settings.groq_model,
-            api_key=settings.groq_api_key,
-        )
-        _search_chain_cache = RetrievalQA.from_chain_type(
-            llm=llm,
-            retriever=retriever,
-            return_source_documents=True,
-        )
-    return _search_chain_cache
+@lru_cache(maxsize=1)
+def _get_vectorstore(embedding_model: str, persist_dir: str) -> Chroma:
+    embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
+    return Chroma(
+        collection_name="transcripts",
+        embedding_function=embeddings,
+        persist_directory=persist_dir,
+    )
 
 
 def semantic_search(query: str, limit: int = 5) -> List[Dict[str, Any]]:
-    chain = get_search_chain()
-    result = chain.invoke({"query": query})
-    docs = result.get("source_documents", [])
+    settings = get_settings()
+    vectorstore = _get_vectorstore(settings.embedding_model, settings.chroma_persist_dir)
+    docs = vectorstore.similarity_search(query, k=limit)
     return [
         {
             "text": doc.page_content,
             "meeting_id": doc.metadata.get("meeting_id", ""),
             "sequence": doc.metadata.get("sequence", 0),
         }
-        for doc in docs[:limit]
+        for doc in docs
     ]
 
 
@@ -52,15 +36,10 @@ def search_transcripts(
     chroma_persist_dir: str | None = None,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
-    """Direct ChromaDB similarity search (no LLM synthesis). Used by eval tests."""
+    """Direct ChromaDB similarity search. Used by eval tests."""
     settings = get_settings()
     persist_dir = chroma_persist_dir or settings.chroma_persist_dir
-    embeddings = HuggingFaceEmbeddings(model_name=settings.embedding_model)
-    vectorstore = Chroma(
-        collection_name="transcripts",
-        embedding_function=embeddings,
-        persist_directory=persist_dir,
-    )
+    vectorstore = _get_vectorstore(settings.embedding_model, persist_dir)
     docs = vectorstore.similarity_search(query, k=limit)
     return [
         {

@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
+from functools import lru_cache
 from typing import List, Optional
 
 from sqlmodel import Field, SQLModel, create_engine
@@ -12,10 +13,11 @@ class Meeting(SQLModel, table=True):
     title: str
     platform_url: str
     status: str
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     ended_at: Optional[datetime] = None
     recall_bot_id: str
     langsmith_trace_url: Optional[str] = None
+    slack_channel_id: Optional[str] = None
 
 
 class Participant(SQLModel, table=True):
@@ -78,6 +80,10 @@ def create_db_and_tables(engine=None):
     return engine
 
 
+@lru_cache(maxsize=1)
 def get_engine():
     settings = get_settings()
-    return create_engine(f"sqlite:///{settings.database_url}")
+    return create_engine(
+        f"sqlite:///{settings.database_url}",
+        connect_args={"check_same_thread": False},
+    )
