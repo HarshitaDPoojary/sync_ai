@@ -1,0 +1,30 @@
+[
+  {
+    "id": "hand_1",
+    "source": "hand_labeled",
+    "transcript": "Alice: We've decided to migrate to PostgreSQL by end of Q1.\nBob: I'll handle the schema migration. Target is March 15th.\nAlice: One blocker — we don't have staging credentials yet.\nBob: I'll get those from DevOps by Monday.\nCarol: We need to update the API docs before the client demo on Wednesday.",
+    "expected_signals": [
+      {"signal_type": "decision", "summary": "Migrate to PostgreSQL by end of Q1"},
+      {"signal_type": "blocker", "summary": "No staging credentials"},
+      {"signal_type": "commitment", "summary": "Bob will get staging credentials by Monday"}
+    ],
+    "expected_action_items": [
+      {"task": "Handle the schema migration", "owner_name": "Bob", "deadline": "March 15th", "supporting_quote": "I'll handle the schema migration. Target is March 15th"},
+      {"task": "Get staging credentials from DevOps", "owner_name": "Bob", "deadline": "Monday", "supporting_quote": "I'll get those from DevOps by Monday"},
+      {"task": "Update the API docs before client demo", "owner_name": "Carol", "deadline": "Wednesday", "supporting_quote": "we need to update the API docs before the client demo on Wednesday"}
+    ]
+  },
+  {
+    "id": "hand_2",
+    "source": "hand_labeled",
+    "transcript": "Dave: The API latency is above 500ms in production. That's a blocker for the release.\nEve: I can profile the slow queries this week and send a report.\nDave: We also committed to delivering the dashboard to the client by Thursday.\nEve: Got it. I'll prioritize the dashboard over the profiling.",
+    "expected_signals": [
+      {"signal_type": "blocker", "summary": "API latency above 500ms blocking release"},
+      {"signal_type": "commitment", "summary": "Deliver dashboard to client by Thursday"}
+    ],
+    "expected_action_items": [
+      {"task": "Profile slow queries and send report", "owner_name": "Eve", "deadline": "this week", "supporting_quote": "I can profile the slow queries this week and send a report"},
+      {"task": "Prioritize dashboard delivery", "owner_name": "Eve", "deadline": "Thursday", "supporting_quote": "I'll prioritize the dashboard over the profiling"}
+    ]
+  }
+]
