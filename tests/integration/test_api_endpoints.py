@@ -9,7 +9,9 @@ def client():
          patch("app.core.session.chromadb"), \
          patch("app.core.session.HuggingFaceEmbeddings"), \
          patch("app.core.session.get_engine"), \
-         patch("app.main.get_engine"), \
+         patch("app.repositories.meeting_repo.get_engine"), \
+         patch("app.repositories.transcript_repo.get_engine"), \
+         patch("app.repositories.action_item_repo.get_engine"), \
          patch("app.main.create_db_and_tables"):
         mock_recall = MagicMock()
         mock_recall.create_bot_with_webhook = AsyncMock(return_value={"id": "bot_test"})

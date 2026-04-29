@@ -1,12 +1,8 @@
-import json
 import uuid
 from typing import Any, Optional
 
-from sqlmodel import Session
-
-from app.core.config import get_settings
 from app.core.graph import MeetingState
-from app.models.db import Transcript, get_engine
+from app.repositories.transcript_repo import TranscriptRepository
 
 
 def run_storage_node(
@@ -15,20 +11,14 @@ def run_storage_node(
     chroma_collection=None,
     embedder=None,
 ) -> MeetingState:
-    if engine is None:
-        engine = get_engine()
-
     chunks = state["transcript_chunks"]
     full_text = "\n".join(f"{c['speaker']}: {c['text']}" for c in chunks)
 
-    with Session(engine) as session:
-        transcript = session.get(Transcript, state["meeting_id"])
-        if transcript is None:
-            transcript = Transcript(id=state["meeting_id"], meeting_id=state["meeting_id"])
-            session.add(transcript)
-        transcript.full_text = full_text
-        transcript.chunks_json = json.dumps(chunks)
-        session.commit()
+    TranscriptRepository(engine).upsert(
+        meeting_id=state["meeting_id"],
+        full_text=full_text,
+        chunks=list(chunks),
+    )
 
     if chroma_collection and embedder:
         words = full_text.split()
