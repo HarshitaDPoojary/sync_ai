@@ -12,7 +12,6 @@ langchain-core==0.3.17
 langgraph==0.2.38
 langsmith==0.1.136
 chromadb==0.5.15
-sentence-transformers==3.1.1
 slack-sdk==3.33.1
 google-api-python-client==2.149.0
 google-auth-httplib2==0.2.0

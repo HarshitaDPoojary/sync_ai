@@ -42,8 +42,9 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "info"
 
-    # Embeddings (swap to upgrade, e.g. "BAAI/bge-base-en-v1.5")
-    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    # Embeddings — uses HuggingFace Inference API (no local model, no RAM cost)
+    huggingface_api_key: str = ""
+    embedding_model: str = "thenlper/gte-large"
 
     # Eval datasets (HuggingFace repo names)
     ami_dataset_repo: str = "edinburghcristin/ami-corpus"

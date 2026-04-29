@@ -2,14 +2,18 @@ from functools import lru_cache
 from typing import Any, Dict, List
 
 from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 
 from app.core.config import get_settings
 
 
 @lru_cache(maxsize=1)
 def _get_vectorstore(embedding_model: str, persist_dir: str) -> Chroma:
-    embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
+    settings = get_settings()
+    embeddings = HuggingFaceInferenceAPIEmbeddings(
+        api_key=settings.huggingface_api_key,
+        model_name=embedding_model,
+    )
     return Chroma(
         collection_name="transcripts",
         embedding_function=embeddings,

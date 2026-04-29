@@ -1,12 +1,11 @@
 import asyncio
 import functools
-import os
 import threading
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import chromadb
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 
 from app.agents.analysis import run_analysis_node
 from app.agents.delivery import run_delivery_node
@@ -49,7 +48,10 @@ class MeetingSession:
 
         chroma_client = _get_chroma_client(settings.chroma_persist_dir)
         self._chroma = chroma_client.get_or_create_collection("transcripts")
-        self._embedder = HuggingFaceEmbeddings(model_name=settings.embedding_model)
+        self._embedder = HuggingFaceInferenceAPIEmbeddings(
+            api_key=settings.huggingface_api_key,
+            model_name=settings.embedding_model,
+        )
 
         participants = [{"name": e.split("@")[0], "email": e} for e in participant_emails]
         self._state: MeetingState = make_initial_state(meeting_id, participants)
