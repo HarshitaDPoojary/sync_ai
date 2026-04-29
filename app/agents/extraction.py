@@ -23,7 +23,7 @@ def get_extraction_chain():
         ])
         llm = ChatGroq(
             model=settings.groq_model,
-            temperature=0.1,
+            temperature=settings.groq_extraction_temperature,
             api_key=settings.groq_api_key,
         )
         _extraction_chain_cache = prompt | llm | JsonOutputParser()

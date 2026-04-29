@@ -10,6 +10,7 @@ class RecallClient:
         settings = get_settings()
         key = api_key or settings.recall_api_key
         self._base_url = settings.recall_base_url
+        self._transcription_provider = settings.recall_transcription_provider
         self._headers = {
             "Authorization": f"Token {key}",
             "Content-Type": "application/json",
@@ -19,8 +20,10 @@ class RecallClient:
         self,
         meeting_url: str,
         webhook_url: str,
-        bot_name: str = "Meeting Copilot",
+        bot_name: str | None = None,
     ) -> Dict[str, Any]:
+        if bot_name is None:
+            bot_name = get_settings().recall_bot_name
         async with httpx.AsyncClient() as http:
             response = await http.post(
                 f"{self._base_url}/bot/",
@@ -28,7 +31,7 @@ class RecallClient:
                 json={
                     "meeting_url": meeting_url,
                     "bot_name": bot_name,
-                    "transcription_options": {"provider": "assembly_ai"},
+                    "transcription_options": {"provider": self._transcription_provider},
                     "real_time_transcription": {
                         "destination_url": webhook_url,
                         "partial_results": False,

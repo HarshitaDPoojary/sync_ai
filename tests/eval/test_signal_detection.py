@@ -9,10 +9,14 @@ import json
 import os
 import pytest
 
-with open("tests/eval/datasets/golden_transcripts.json") as f:
+from app.core.config import get_settings
+
+_settings = get_settings()
+
+with open(_settings.eval_fixtures_path) as f:
     GOLDEN = [g for g in json.load(f) if g.get("expected_signals")]
 
-DATASET_NAME = "sync_ai-signal-detection"
+DATASET_NAME = _settings.langsmith_signal_dataset
 
 
 def _upload_dataset_if_needed():

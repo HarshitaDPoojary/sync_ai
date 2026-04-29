@@ -6,10 +6,14 @@ import json
 import os
 import pytest
 
-with open("tests/eval/datasets/golden_transcripts.json") as f:
+from app.core.config import get_settings
+
+_settings = get_settings()
+
+with open(_settings.eval_fixtures_path) as f:
     GOLDEN = [g for g in json.load(f) if g.get("expected_action_items") and g["source"] == "hand_labeled"]
 
-DATASET_NAME = "sync_ai-action-extraction"
+DATASET_NAME = _settings.langsmith_extraction_dataset
 PARTICIPANTS = [{"name": n, "email": f"{n.lower()}@test.com"}
                 for n in ["Alice", "Bob", "Carol", "Dave", "Eve"]]
 

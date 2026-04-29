@@ -8,15 +8,21 @@ class Settings(BaseSettings):
     # Recall.ai
     recall_api_key: str = ""
     recall_base_url: str = "https://us-east-1.recall.ai/api/v1"
+    recall_transcription_provider: str = "assembly_ai"
+    recall_bot_name: str = "Meeting Copilot"
 
-    # Groq
+    # Groq (swap groq_model to switch LLM, e.g. "llama-3.3-70b-versatile")
     groq_api_key: str = ""
     groq_model: str = "llama-3.1-70b-versatile"
+    groq_analysis_temperature: float = 0.3
+    groq_extraction_temperature: float = 0.1
 
     # LangSmith
     langchain_tracing_v2: str = "false"
     langchain_api_key: str = ""
     langchain_project: str = "sync_ai"
+    langsmith_signal_dataset: str = "sync_ai-signal-detection"
+    langsmith_extraction_dataset: str = "sync_ai-action-extraction"
 
     # Slack
     slack_bot_token: str = ""
@@ -35,8 +41,13 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "info"
 
-    # Embeddings
+    # Embeddings (swap to upgrade, e.g. "BAAI/bge-base-en-v1.5")
     embedding_model: str = "BAAI/bge-small-en-v1.5"
+
+    # Eval datasets (HuggingFace repo names)
+    ami_dataset_repo: str = "edinburghcristin/ami-corpus"
+    meetingbank_dataset_repo: str = "huuuyeah/meetingbank"
+    eval_fixtures_path: str = "tests/eval/datasets/golden_transcripts.json"
 
     # Analysis tuning
     analysis_token_threshold: int = 500

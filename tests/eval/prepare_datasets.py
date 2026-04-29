@@ -12,14 +12,21 @@ import os
 
 from datasets import load_dataset
 
-OUTPUT = "tests/eval/datasets/golden_transcripts.json"
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+from app.core.config import get_settings
+
+_settings = get_settings()
+OUTPUT = _settings.eval_fixtures_path
 fixtures = []
 
 
 def load_ami():
     print("Loading AMI corpus...")
     try:
-        ds = load_dataset("edinburghcristin/ami-corpus", split="test", trust_remote_code=True)
+        ds = load_dataset(_settings.ami_dataset_repo, split="test", trust_remote_code=True)
     except Exception as e:
         print(f"  AMI load failed ({e}), skipping.")
         return
@@ -51,7 +58,7 @@ def load_ami():
 def load_meetingbank():
     print("Loading MeetingBank...")
     try:
-        ds = load_dataset("huuuyeah/meetingbank", split="test", trust_remote_code=True)
+        ds = load_dataset(_settings.meetingbank_dataset_repo, split="test", trust_remote_code=True)
     except Exception as e:
         print(f"  MeetingBank load failed ({e}), skipping.")
         return
