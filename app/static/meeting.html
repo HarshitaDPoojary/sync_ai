@@ -306,6 +306,36 @@
     loading.textContent = message;
   }
 
+  function loadClerkScript(clerkPublishableKey, clerkFrontendApi) {
+    const urls = [
+      clerkFrontendApi ? `https://${clerkFrontendApi}/npm/@clerk/clerk-js@6/dist/clerk.browser.js` : null,
+      'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6/dist/clerk.browser.js',
+    ].filter(Boolean);
+
+    return new Promise((resolve, reject) => {
+      const failed = [];
+      const tryNext = () => {
+        const url = urls.shift();
+        if (!url) {
+          reject(new Error(`Failed to load Clerk from: ${failed.join(', ')}`));
+          return;
+        }
+        const script = document.createElement('script');
+        script.crossOrigin = 'anonymous';
+        script.setAttribute('data-clerk-publishable-key', clerkPublishableKey);
+        script.src = url;
+        script.onload = () => resolve();
+        script.onerror = () => {
+          failed.push(url);
+          script.remove();
+          tryNext();
+        };
+        document.head.appendChild(script);
+      };
+      tryNext();
+    });
+  }
+
   // Boot Clerk
   (async () => {
     try {
@@ -314,29 +344,20 @@
       const { clerk_publishable_key, clerk_frontend_api } = await configResp.json();
       if (!clerk_publishable_key) throw new Error('Missing CLERK_PUBLISHABLE_KEY on the server');
 
-      const script = document.createElement('script');
-      script.crossOrigin = 'anonymous';
-      script.setAttribute('data-clerk-publishable-key', clerk_publishable_key);
-      script.src = clerk_frontend_api
-        ? `https://${clerk_frontend_api}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`
-        : 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6/dist/clerk.browser.js';
-      script.onerror = () => showFatal('Failed to load Clerk. Check network access and Clerk configuration.');
-      script.onload = async () => {
-        try {
-          const clerk = window.Clerk;
-          if (!clerk) throw new Error('Clerk script loaded without creating window.Clerk');
-          await clerk.load();
-          __clerk = clerk;
-          if (!clerk.user) {
-            clerk.openSignIn({ afterSignInUrl: window.location.href });
-            return;
-          }
-          await initApp();
-        } catch (err) {
-          showFatal(`Authentication failed: ${err.message}`);
+      await loadClerkScript(clerk_publishable_key, clerk_frontend_api);
+      try {
+        const clerk = window.Clerk;
+        if (!clerk) throw new Error('Clerk script loaded without creating window.Clerk');
+        await clerk.load();
+        __clerk = clerk;
+        if (!clerk.user) {
+          clerk.openSignIn({ afterSignInUrl: window.location.href });
+          return;
         }
-      };
-      document.head.appendChild(script);
+        await initApp();
+      } catch (err) {
+        showFatal(`Authentication failed: ${err.message}`);
+      }
     } catch (err) {
       showFatal(`Startup failed: ${err.message}`);
     }
