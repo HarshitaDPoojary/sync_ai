@@ -132,8 +132,16 @@
   }
 
   function loadClerkScript(clerkPublishableKey, clerkFrontendApi) {
+    const frontendApi = (() => {
+      if (!clerkFrontendApi) return '';
+      try {
+        return new URL(clerkFrontendApi.includes('://') ? clerkFrontendApi : `https://${clerkFrontendApi}`).host;
+      } catch {
+        return clerkFrontendApi.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      }
+    })();
     const urls = [
-      clerkFrontendApi ? `https://${clerkFrontendApi}/npm/@clerk/clerk-js@6/dist/clerk.browser.js` : null,
+      frontendApi ? `https://${frontendApi}/npm/@clerk/clerk-js@6/dist/clerk.browser.js` : null,
       'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6/dist/clerk.browser.js',
     ].filter(Boolean);
 
@@ -176,8 +184,11 @@
         await clerk.load();
         __clerk = clerk;
         if (!clerk.user) {
-          document.getElementById('loading').textContent = 'Signing in...';
-          clerk.openSignIn({ afterSignInUrl: '/settings' });
+          document.getElementById('loading').textContent = 'Redirecting to sign in...';
+          await clerk.redirectToSignIn({
+            signInFallbackRedirectUrl: '/settings',
+            signUpFallbackRedirectUrl: '/settings',
+          });
           return;
         }
         await initApp();

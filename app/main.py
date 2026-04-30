@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta, timezone, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlparse, urlencode
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
 
@@ -76,6 +76,13 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 _STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _normalize_clerk_frontend_api(value: str) -> str:
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    return parsed.netloc or parsed.path.rstrip("/")
+
+
 # ── Request schemas ────────────────────────────────────────────────────────────
 
 class StartSessionRequest(BaseModel):
@@ -103,7 +110,7 @@ def get_public_config():
     settings = get_settings()
     return {
         "clerk_publishable_key": settings.clerk_publishable_key,
-        "clerk_frontend_api": settings.clerk_frontend_api,
+        "clerk_frontend_api": _normalize_clerk_frontend_api(settings.clerk_frontend_api),
     }
 
 
