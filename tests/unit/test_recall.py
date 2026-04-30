@@ -4,7 +4,8 @@ from app.core.recall import RecallClient
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setenv("RECALL_BASE_URL", "https://us-east-1.recall.ai/api/v1")
     return RecallClient(api_key="test_key")
 
 

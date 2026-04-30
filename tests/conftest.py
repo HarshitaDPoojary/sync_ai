@@ -5,6 +5,8 @@ from sqlmodel import create_engine
 os.environ.setdefault("GROQ_API_KEY", "test_key")
 os.environ.setdefault("DATABASE_URL", ":memory:")
 os.environ.setdefault("CHROMA_PERSIST_DIR", "./data/test_chroma")
+os.environ["APP_ENV"] = "development"
+os.environ["RECALL_WEBHOOK_SECRET"] = ""
 
 from app.models.db import create_db_and_tables
 

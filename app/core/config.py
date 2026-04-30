@@ -1,5 +1,11 @@
 from functools import lru_cache
+from typing import Iterable
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when required runtime configuration is missing or inconsistent."""
 
 
 class Settings(BaseSettings):
@@ -55,6 +61,7 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./data/chroma"
 
     # App
+    app_env: str = "development"
     webhook_base_url: str = "http://localhost:8000"
     recall_webhook_secret: str = ""  # shared secret for Recall.ai webhook HMAC verification
     app_host: str = "0.0.0.0"
@@ -74,6 +81,72 @@ class Settings(BaseSettings):
     analysis_token_threshold: int = 500
     analysis_window_seconds: int = 300
     extraction_checkpoint_chunks: int = 50
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.lower() in {"prod", "production"}
+
+
+def _missing(settings: Settings, names: Iterable[str]) -> list[str]:
+    return [name for name in names if not str(getattr(settings, name, "")).strip()]
+
+
+def _configured(settings: Settings, names: Iterable[str]) -> list[str]:
+    return [name for name in names if str(getattr(settings, name, "")).strip()]
+
+
+def validate_settings(settings: Settings) -> None:
+    """Validate environment-driven configuration.
+
+    Development stays permissive so tests and local UI work without every external
+    provider configured. Production fails fast for core dependencies, and all
+    environments reject partially configured optional integrations.
+    """
+    errors: list[str] = []
+
+    if settings.is_production:
+        required = [
+            "recall_api_key",
+            "groq_api_key",
+            "huggingface_api_key",
+            "clerk_secret_key",
+            "clerk_publishable_key",
+            "clerk_frontend_api",
+            "database_url",
+            "chroma_persist_dir",
+            "webhook_base_url",
+            "recall_webhook_secret",
+        ]
+        missing = _missing(settings, required)
+        if missing:
+            errors.append("Missing production settings: " + ", ".join(sorted(missing)))
+        elif not settings.recall_webhook_secret.startswith("whsec_"):
+            errors.append("recall_webhook_secret must be a Recall workspace secret starting with whsec_")
+
+    optional_groups = {
+        "Slack OAuth": [
+            "slack_client_id",
+            "slack_client_secret",
+            "slack_oauth_redirect_uri",
+        ],
+        "Slack legacy bot": [
+            "slack_bot_token",
+            "slack_channel_id",
+        ],
+        "Google OAuth": [
+            "google_client_id",
+            "google_client_secret",
+            "google_oauth_redirect_uri",
+        ],
+    }
+    for label, names in optional_groups.items():
+        if _configured(settings, names):
+            missing = _missing(settings, names)
+            if missing:
+                errors.append(f"Incomplete {label} settings: " + ", ".join(sorted(missing)))
+
+    if errors:
+        raise ConfigurationError("; ".join(errors))
 
 
 @lru_cache

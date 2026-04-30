@@ -32,11 +32,12 @@ class GoogleCalendarClient:
         result = []
         for e in events.get("items", []):
             url = e.get("hangoutLink") or _extract_video_url(e)
-            if url:
+            start_time = e["start"].get("dateTime")
+            if url and start_time:
                 result.append({
                     "id": e["id"],
                     "title": e.get("summary", "Meeting"),
-                    "start_time": e["start"].get("dateTime"),
+                    "start_time": start_time,
                     "meeting_url": url,
                 })
         return result

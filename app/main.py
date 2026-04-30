@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import hmac
 import logging
@@ -9,6 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta, timezone, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
 
@@ -25,7 +27,7 @@ logger = logging.getLogger("sync_ai")
 load_dotenv()
 
 from app.auth.clerk import get_current_user
-from app.core.config import get_settings
+from app.core.config import get_settings, validate_settings
 from app.core.search import semantic_search
 from app.core.session import MeetingSession
 from app.models.db import User, UserIntegration, create_db_and_tables
@@ -43,6 +45,7 @@ _ws_connections: Dict[str, List[WebSocket]] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_settings(get_settings())
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -324,13 +327,13 @@ async def slack_oauth_start(current_user: User = Depends(get_current_user)):
         {"user_id": current_user.id, "exp": time.time() + 600},
         settings.clerk_secret_key, algorithm="HS256",
     )
-    url = (
-        "https://slack.com/oauth/v2/authorize"
-        f"?client_id={settings.slack_client_id}"
-        "&scope=chat:write,chat:write.public,channels:read"
-        f"&redirect_uri={settings.slack_oauth_redirect_uri}"
-        f"&state={state}"
-    )
+    params = urlencode({
+        "client_id": settings.slack_client_id,
+        "scope": "chat:write,chat:write.public,channels:read",
+        "redirect_uri": settings.slack_oauth_redirect_uri,
+        "state": state,
+    })
+    url = f"https://slack.com/oauth/v2/authorize?{params}"
     return RedirectResponse(url)
 
 
@@ -378,15 +381,16 @@ async def google_oauth_start(current_user: User = Depends(get_current_user)):
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/calendar.readonly",
     ])
-    url = (
-        "https://accounts.google.com/o/oauth2/v2/auth"
-        f"?client_id={settings.google_client_id}"
-        "&response_type=code"
-        f"&redirect_uri={settings.google_oauth_redirect_uri}"
-        f"&scope={scopes}"
-        "&access_type=offline&prompt=consent"
-        f"&state={state}"
-    )
+    params = urlencode({
+        "client_id": settings.google_client_id,
+        "response_type": "code",
+        "redirect_uri": settings.google_oauth_redirect_uri,
+        "scope": scopes,
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    })
+    url = f"https://accounts.google.com/o/oauth2/v2/auth?{params}"
     return RedirectResponse(url)
 
 
@@ -428,18 +432,41 @@ async def google_oauth_callback(code: str, state: str):
 
 # ── Recall.ai webhook ──────────────────────────────────────────────────────────
 
-def _verify_recall_signature(request_body: bytes, signature_header: str, secret: str) -> bool:
-    expected = hmac.new(secret.encode(), request_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
+def _verify_recall_signature(request_body: bytes, headers: Dict[str, str], secret: str) -> bool:
+    msg_id = headers.get("webhook-id") or headers.get("svix-id")
+    msg_timestamp = headers.get("webhook-timestamp") or headers.get("svix-timestamp")
+    msg_signature = headers.get("webhook-signature") or headers.get("svix-signature")
+    if not secret.startswith("whsec_") or not msg_id or not msg_timestamp or not msg_signature:
+        return False
+
+    try:
+        key = base64.b64decode(secret.removeprefix("whsec_"))
+        payload = request_body.decode("utf-8")
+    except Exception:
+        return False
+
+    signed_content = f"{msg_id}.{msg_timestamp}.{payload}".encode("utf-8")
+    expected = base64.b64encode(
+        hmac.new(key, signed_content, hashlib.sha256).digest()
+    ).decode("utf-8")
+
+    for versioned_signature in msg_signature.split(" "):
+        try:
+            version, signature = versioned_signature.split(",", 1)
+        except ValueError:
+            continue
+        if version == "v1" and hmac.compare_digest(expected, signature):
+            return True
+    return False
 
 
 @app.post("/webhook/recall/{meeting_id}")
 async def recall_webhook(meeting_id: str, request: Request, payload: Dict[str, Any]):
     settings = get_settings()
     if settings.recall_webhook_secret:
-        sig = request.headers.get("X-Recall-Signature", "")
         body = await request.body()
-        if not _verify_recall_signature(body, sig, settings.recall_webhook_secret):
+        headers = {key.lower(): value for key, value in request.headers.items()}
+        if not _verify_recall_signature(body, headers, settings.recall_webhook_secret):
             logger.warning("webhook_invalid_signature meeting_id=%s", meeting_id)
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
 

@@ -163,24 +163,42 @@
     window.location.reload();
   }
 
+  function showFatal(message) {
+    const loading = document.getElementById('loading');
+    loading.style.display = 'block';
+    loading.textContent = message;
+  }
+
   // Boot Clerk
   (async () => {
-    const configResp = await fetch('/config');
-    const { clerk_publishable_key } = await configResp.json();
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
-    script.onload = async () => {
-      const clerk = new window.Clerk(clerk_publishable_key);
-      await clerk.load();
-      __clerk = clerk;
-      if (!clerk.user) {
-        document.getElementById('loading').textContent = 'Signing in...';
-        clerk.openSignIn({ afterSignInUrl: '/' });
-        return;
-      }
-      initApp();
-    };
-    document.head.appendChild(script);
+    try {
+      const configResp = await fetch('/config');
+      if (!configResp.ok) throw new Error(`Config request failed (${configResp.status})`);
+      const { clerk_publishable_key } = await configResp.json();
+      if (!clerk_publishable_key) throw new Error('Missing CLERK_PUBLISHABLE_KEY on the server');
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+      script.onerror = () => showFatal('Failed to load Clerk. Check network access and Clerk configuration.');
+      script.onload = async () => {
+        try {
+          const clerk = new window.Clerk(clerk_publishable_key);
+          await clerk.load();
+          __clerk = clerk;
+          if (!clerk.user) {
+            document.getElementById('loading').textContent = 'Signing in...';
+            clerk.openSignIn({ afterSignInUrl: '/' });
+            return;
+          }
+          await initApp();
+        } catch (err) {
+          showFatal(`Authentication failed: ${err.message}`);
+        }
+      };
+      document.head.appendChild(script);
+    } catch (err) {
+      showFatal(`Startup failed: ${err.message}`);
+    }
   })();
 </script>
 </body>

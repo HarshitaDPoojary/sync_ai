@@ -16,6 +16,8 @@ EMBEDDING_MODEL=thenlper/gte-large
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_API_KEY=your_langsmith_api_key
 LANGCHAIN_PROJECT=sync_ai
+LANGSMITH_SIGNAL_DATASET=sync_ai-signal-detection
+LANGSMITH_EXTRACTION_DATASET=sync_ai-action-extraction
 
 # ── Clerk Auth ────────────────────────────────────────────────────────────────
 CLERK_SECRET_KEY=sk_live_...
@@ -40,7 +42,11 @@ DATABASE_URL=./data/sync_ai.db
 CHROMA_PERSIST_DIR=./data/chroma
 
 # ── App ───────────────────────────────────────────────────────────────────────
+APP_ENV=development
 WEBHOOK_BASE_URL=https://your-app.onrender.com
+RECALL_WEBHOOK_SECRET=whsec_your_recall_workspace_verification_secret
+APP_HOST=0.0.0.0
+APP_PORT=8000
 LOG_LEVEL=info
 
 # ── Calendar auto-join ────────────────────────────────────────────────────────
@@ -51,3 +57,8 @@ CALENDAR_BOT_DISPATCH_OFFSET_SECONDS=120
 AMI_DATASET_REPO=edinburghcristin/ami-corpus
 MEETINGBANK_DATASET_REPO=huuuyeah/meetingbank
 EVAL_FIXTURES_PATH=tests/eval/datasets/golden_transcripts.json
+
+# ── Analysis tuning ──────────────────────────────────────────────────────────
+ANALYSIS_TOKEN_THRESHOLD=500
+ANALYSIS_WINDOW_SECONDS=300
+EXTRACTION_CHECKPOINT_CHUNKS=50
