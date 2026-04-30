@@ -174,15 +174,20 @@
     try {
       const configResp = await fetch('/config');
       if (!configResp.ok) throw new Error(`Config request failed (${configResp.status})`);
-      const { clerk_publishable_key } = await configResp.json();
+      const { clerk_publishable_key, clerk_frontend_api } = await configResp.json();
       if (!clerk_publishable_key) throw new Error('Missing CLERK_PUBLISHABLE_KEY on the server');
 
       const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+      script.crossOrigin = 'anonymous';
+      script.setAttribute('data-clerk-publishable-key', clerk_publishable_key);
+      script.src = clerk_frontend_api
+        ? `https://${clerk_frontend_api}/npm/@clerk/clerk-js@6/dist/clerk.browser.js`
+        : 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@6/dist/clerk.browser.js';
       script.onerror = () => showFatal('Failed to load Clerk. Check network access and Clerk configuration.');
       script.onload = async () => {
         try {
-          const clerk = new window.Clerk(clerk_publishable_key);
+          const clerk = window.Clerk;
+          if (!clerk) throw new Error('Clerk script loaded without creating window.Clerk');
           await clerk.load();
           __clerk = clerk;
           if (!clerk.user) {

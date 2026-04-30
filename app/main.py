@@ -101,7 +101,10 @@ def health():
 @app.get("/config")
 def get_public_config():
     settings = get_settings()
-    return {"clerk_publishable_key": settings.clerk_publishable_key}
+    return {
+        "clerk_publishable_key": settings.clerk_publishable_key,
+        "clerk_frontend_api": settings.clerk_frontend_api,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
