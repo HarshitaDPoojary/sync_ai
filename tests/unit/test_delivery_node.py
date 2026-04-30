@@ -40,28 +40,28 @@ def test_delivery_node_skips_when_no_slack():
 
 def test_delivery_node_calls_gmail_per_owner():
     state = _state_with_item(owner_email="bob@x.com")
-    mock_gmail = MagicMock()
+    mock_client = MagicMock()
+    mock_integration = MagicMock(access_token="tok", refresh_token="ref")
 
     with patch("app.agents.delivery._get_slack_client", return_value=None), \
-         patch("app.agents.delivery.GmailClient", return_value=mock_gmail), \
-         patch("app.agents.delivery.get_settings") as mock_settings:
-        mock_settings.return_value.gmail_credentials_json = "dummytoken"
-        run_delivery_node(state, meeting_title="Sprint Review")
+         patch("app.integrations.gmail.GmailClient", return_value=mock_client) as MockGmail, \
+         patch("app.core.config.get_settings"):
+        run_delivery_node(state, meeting_title="Sprint Review", gmail_integration=mock_integration)
 
-    mock_gmail.send_action_items.assert_called_once()
-    args = mock_gmail.send_action_items.call_args
-    assert args[0][0] == "bob@x.com"
-    assert args[0][2] == "Sprint Review"
+    MockGmail.assert_called_once()
+    mock_client.send_action_items.assert_called_once()
+    args = mock_client.send_action_items.call_args[0]
+    assert args[0] == "bob@x.com"
+    assert args[2] == "Sprint Review"
 
 
 def test_delivery_node_skips_gmail_when_no_credentials():
     state = _state_with_item()
-    mock_gmail = MagicMock()
+    mock_client = MagicMock()
 
     with patch("app.agents.delivery._get_slack_client", return_value=None), \
-         patch("app.agents.delivery.GmailClient", return_value=mock_gmail), \
-         patch("app.agents.delivery.get_settings") as mock_settings:
-        mock_settings.return_value.gmail_credentials_json = ""
-        run_delivery_node(state, meeting_title="Sprint Review")
+         patch("app.integrations.gmail.GmailClient", return_value=mock_client):
+        # No gmail_integration passed → should not send
+        run_delivery_node(state, meeting_title="Sprint Review", gmail_integration=None)
 
-    mock_gmail.send_action_items.assert_not_called()
+    mock_client.send_action_items.assert_not_called()

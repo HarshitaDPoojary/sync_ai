@@ -32,6 +32,8 @@ class MeetingSession:
         recall_api_key: Optional[str] = None,
         webhook_base_url: Optional[str] = None,
         slack_channel_id: Optional[str] = None,
+        slack_bot_token: Optional[str] = None,
+        user_id: Optional[str] = None,
     ):
         settings = get_settings()
         self.meeting_id = meeting_id
@@ -39,15 +41,18 @@ class MeetingSession:
         self.title = title
         self.participant_emails = participant_emails
         self.bot_id: Optional[str] = None
+        self.user_id = user_id
 
         self._recall = RecallClient(api_key=recall_api_key)
         self._webhook_base_url = webhook_base_url or settings.webhook_base_url
         self._slack_channel_id = slack_channel_id
+        self._slack_bot_token = slack_bot_token
         self._engine = get_engine()
         self._lock = threading.Lock()
 
         chroma_client = _get_chroma_client(settings.chroma_persist_dir)
-        self._chroma = chroma_client.get_or_create_collection("transcripts")
+        collection_name = f"user_{user_id}" if user_id else "transcripts"
+        self._chroma = chroma_client.get_or_create_collection(collection_name)
         self._embedder = HuggingFaceInferenceAPIEmbeddings(
             api_key=settings.huggingface_api_key,
             model_name=settings.embedding_model,
@@ -63,6 +68,7 @@ class MeetingSession:
                 run_delivery_node,
                 meeting_title=title,
                 slack_channel_id=slack_channel_id,
+                slack_bot_token=slack_bot_token,
             ),
             storage_node=functools.partial(
                 run_storage_node,

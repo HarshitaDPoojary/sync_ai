@@ -31,15 +31,13 @@ def test_search_returns_relevant_chunk(case):
     mock_doc.metadata = {"meeting_id": "eval", "sequence": 0}
 
     with patch("app.core.search.Chroma") as MockChroma, \
-         patch("app.core.search.HuggingFaceEmbeddings"):
+         patch("app.core.search.HuggingFaceInferenceAPIEmbeddings"):
         mock_vs = MagicMock()
         mock_vs.similarity_search.return_value = [mock_doc]
         MockChroma.return_value = mock_vs
 
-        from app.core.search import _get_vectorstore, search_transcripts
-        _get_vectorstore.cache_clear()
-
-        results = search_transcripts(case["query"], chroma_persist_dir="/tmp/test_chroma", limit=3)
+        from app.core.search import search_transcripts
+        results = search_transcripts(case["query"], user_id=None, limit=3)
 
     assert len(results) > 0, f"No results for: {case['query']}"
     result_text = results[0]["text"].lower()

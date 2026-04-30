@@ -2,29 +2,38 @@ import logging
 from collections import defaultdict
 from typing import Optional
 
-from app.core.config import get_settings
 from app.core.graph import MeetingState
-from app.integrations.gmail import GmailClient
 from app.integrations.slack import SlackClient
 
 logger = logging.getLogger("sync_ai.delivery")
 
 
-def _get_slack_client(channel_id: Optional[str]) -> Optional[SlackClient]:
-    settings = get_settings()
-    token = settings.slack_bot_token
-    channel = channel_id or settings.slack_channel_id
-    if not token or not channel:
+def _get_slack_client(
+    channel_id: Optional[str],
+    bot_token: Optional[str],
+) -> Optional[SlackClient]:
+    if not bot_token or not channel_id:
         return None
-    return SlackClient(bot_token=token, channel_id=channel)
+    return SlackClient(bot_token=bot_token, channel_id=channel_id)
 
 
-def _send_gmail(items: list, meeting_title: str) -> None:
-    """Send each owner their own action items by email."""
-    settings = get_settings()
-    if not settings.gmail_credentials_json:
+def _send_gmail(
+    items: list,
+    meeting_title: str,
+    gmail_integration=None,
+) -> None:
+    """Send each owner their own action items by email using per-user OAuth credentials."""
+    if gmail_integration is None:
         return
-    client = GmailClient()
+    from app.core.config import get_settings
+    from app.integrations.gmail import GmailClient
+    settings = get_settings()
+    client = GmailClient(
+        access_token=gmail_integration.access_token,
+        refresh_token=gmail_integration.refresh_token,
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+    )
     by_owner: dict = defaultdict(list)
     for item in items:
         email = item.get("owner_email")
@@ -43,11 +52,13 @@ def run_delivery_node(
     state: MeetingState,
     meeting_title: str = "Meeting",
     slack_channel_id: Optional[str] = None,
+    slack_bot_token: Optional[str] = None,
+    gmail_integration=None,
 ) -> MeetingState:
     items = [dict(item) for item in state["action_items"]]
     summary = state.get("summary") or {}
 
-    slack = _get_slack_client(slack_channel_id)
+    slack = _get_slack_client(slack_channel_id, slack_bot_token)
     if slack and items:
         try:
             slack.send_action_items_sync(meeting_title, items)
@@ -66,6 +77,6 @@ def run_delivery_node(
             logger.warning("slack_summary_failed error=%s", exc)
 
     if items:
-        _send_gmail(items, meeting_title)
+        _send_gmail(items, meeting_title, gmail_integration)
 
     return state

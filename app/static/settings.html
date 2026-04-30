@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sync_ai — Integrations</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+    #topbar { display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: #1a1d27; border-bottom: 1px solid #2d3148; }
+    #topbar h1 { font-size: 18px; font-weight: 700; color: #a78bfa; }
+    #nav-links { display: flex; gap: 12px; }
+    #nav-links a { font-size: 13px; color: #94a3b8; text-decoration: none; }
+    #nav-links a:hover { color: #e2e8f0; }
+    #user-info { font-size: 13px; color: #94a3b8; margin-left: auto; }
+    button { cursor: pointer; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; transition: opacity .15s; }
+    button:hover { opacity: .85; }
+
+    #content { max-width: 700px; margin: 40px auto; padding: 0 24px; display: none; flex-direction: column; gap: 20px; }
+    #content h2 { font-size: 22px; color: #c4b5fd; margin-bottom: 4px; }
+    .integration-card { background: #1a1d27; border-radius: 12px; padding: 24px; border: 1px solid #2d3148; display: flex; align-items: center; gap: 20px; }
+    .integration-card .icon { font-size: 28px; }
+    .integration-card .info { flex: 1; }
+    .integration-card .info h3 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .integration-card .info p { font-size: 13px; color: #94a3b8; }
+    .status-pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 99px; }
+    .status-pill.connected { background: #14532d; color: #22c55e; }
+    .status-pill.disconnected { background: #1e293b; color: #64748b; }
+    .btn-connect { background: #7c3aed; color: #fff; }
+    .btn-reconnect { background: #334155; color: #e2e8f0; }
+    #loading { text-align: center; padding: 60px; color: #94a3b8; }
+    .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; }
+    .alert.success { background: #14532d; color: #22c55e; }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>sync_ai</h1>
+  <div id="nav-links">
+    <a href="/">Dashboard</a>
+    <a href="/settings">Integrations</a>
+  </div>
+  <div id="user-info"></div>
+</div>
+
+<div id="loading">Loading...</div>
+
+<div id="content">
+  <div>
+    <h2>Integrations</h2>
+    <p style="color:#94a3b8;font-size:14px;margin-top:8px">Connect your accounts to enable Slack notifications and Gmail delivery.</p>
+  </div>
+
+  <div id="connected-alert" class="alert success" style="display:none"></div>
+
+  <!-- Slack -->
+  <div class="integration-card">
+    <div class="icon">💬</div>
+    <div class="info">
+      <h3>Slack</h3>
+      <p>Receive action items and meeting summaries in your Slack workspace.</p>
+      <span id="slack-status" class="status-pill disconnected">Not connected</span>
+    </div>
+    <a id="btn-slack" href="/auth/slack"><button class="btn-connect">Connect Slack</button></a>
+  </div>
+
+  <!-- Google (Gmail + Calendar) -->
+  <div class="integration-card">
+    <div class="icon">📧</div>
+    <div class="info">
+      <h3>Google (Gmail + Calendar)</h3>
+      <p>Send action item emails via Gmail and auto-join Google Calendar meetings.</p>
+      <span id="google-status" class="status-pill disconnected">Not connected</span>
+    </div>
+    <a id="btn-google" href="/auth/google"><button class="btn-connect">Connect Google</button></a>
+  </div>
+</div>
+
+<script>
+  let __clerk = null;
+
+  async function apiFetch(url, options = {}) {
+    const token = await __clerk.session.getToken();
+    options.headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+    return fetch(url, options);
+  }
+
+  async function initApp() {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'flex';
+
+    const me = await (await apiFetch('/me')).json();
+    document.getElementById('user-info').textContent = me.email || me.name || '';
+
+    const intRes = await apiFetch('/integrations');
+    const integrations = await intRes.json();
+
+    if (integrations.slack) {
+      document.getElementById('slack-status').textContent = 'Connected';
+      document.getElementById('slack-status').className = 'status-pill connected';
+      document.getElementById('btn-slack').querySelector('button').textContent = 'Reconnect';
+      document.getElementById('btn-slack').querySelector('button').className = 'btn-reconnect';
+    }
+
+    if (integrations.gmail || integrations.google_calendar) {
+      document.getElementById('google-status').textContent = 'Connected';
+      document.getElementById('google-status').className = 'status-pill connected';
+      document.getElementById('btn-google').querySelector('button').textContent = 'Reconnect';
+      document.getElementById('btn-google').querySelector('button').className = 'btn-reconnect';
+    }
+
+    // Show success banner from OAuth redirects
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    if (connected) {
+      const names = { slack: 'Slack', google: 'Google (Gmail + Calendar)' };
+      const alert = document.getElementById('connected-alert');
+      alert.style.display = 'block';
+      alert.textContent = `✓ ${names[connected] || connected} connected successfully!`;
+    }
+  }
+
+  // Boot Clerk
+  (async () => {
+    const configResp = await fetch('/config');
+    const { clerk_publishable_key } = await configResp.json();
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+    script.onload = async () => {
+      const clerk = new window.Clerk(clerk_publishable_key);
+      await clerk.load();
+      __clerk = clerk;
+      if (!clerk.user) {
+        document.getElementById('loading').textContent = 'Signing in...';
+        clerk.openSignIn({ afterSignInUrl: '/settings' });
+        return;
+      }
+      initApp();
+    };
+    document.head.appendChild(script);
+  })();
+</script>
+</body>
+</html>

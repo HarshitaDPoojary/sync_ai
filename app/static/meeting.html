@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sync_ai — Live Meeting</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f1117; color: #e2e8f0; height: 100vh; display: flex; flex-direction: column; }
+
+    /* ── Top bar ── */
+    #topbar { display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: #1a1d27; border-bottom: 1px solid #2d3148; }
+    #topbar h1 { font-size: 18px; font-weight: 700; color: #a78bfa; text-decoration: none; }
+    #topbar h1 a { color: inherit; text-decoration: none; }
+    #session-title { font-size: 14px; color: #94a3b8; flex: 1; }
+    #status-dot { width: 10px; height: 10px; border-radius: 50%; background: #64748b; }
+    #status-dot.active { background: #22c55e; box-shadow: 0 0 6px #22c55e; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+    button { cursor: pointer; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; transition: opacity .15s; }
+    button:hover { opacity: .85; }
+    #btn-end     { background: #dc2626; color: #fff; }
+    #btn-deliver { background: #0369a1; color: #fff; }
+
+    /* ── Main layout ── */
+    #main { display: flex; flex: 1; overflow: hidden; }
+    #left  { width: 60%; border-right: 1px solid #2d3148; display: flex; flex-direction: column; }
+    #right { width: 40%; display: flex; flex-direction: column; }
+
+    /* ── Transcript ── */
+    #transcript-header { padding: 12px 16px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #94a3b8; border-bottom: 1px solid #2d3148; }
+    #transcript { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+    .chunk { background: #1a1d27; border-radius: 8px; padding: 10px 14px; }
+    .chunk .speaker { font-size: 11px; font-weight: 700; color: #7c3aed; margin-bottom: 4px; }
+    .chunk .text { font-size: 14px; line-height: 1.5; color: #cbd5e1; }
+
+    /* ── Right tabs ── */
+    #tabs { display: flex; border-bottom: 1px solid #2d3148; }
+    .tab { flex: 1; padding: 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #94a3b8; cursor: pointer; text-align: center; border-bottom: 2px solid transparent; background: none; border-top: none; border-left: none; border-right: none; border-radius: 0; }
+    .tab.active { color: #a78bfa; border-bottom-color: #7c3aed; }
+    #tab-content { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+
+    /* ── Cards ── */
+    .card { background: #1a1d27; border-radius: 8px; padding: 12px 14px; }
+    .card .label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
+    .card .body { font-size: 13px; line-height: 1.5; color: #cbd5e1; }
+    .label.question      { color: #60a5fa; }
+    .label.clarification { color: #34d399; }
+    .label.talking_point { color: #f59e0b; }
+    .label.decision      { color: #a78bfa; }
+    .label.blocker       { color: #f87171; }
+    .label.commitment    { color: #34d399; }
+    .card .meta { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+    .needs-review { border-left: 3px solid #f59e0b; }
+    .conf { font-size: 10px; color: #94a3b8; float: right; }
+
+    /* ── Search ── */
+    #search-bar { padding: 12px 24px; background: #1a1d27; border-top: 1px solid #2d3148; display: flex; gap: 8px; position: relative; }
+    #search-input { flex: 1; background: #0f1117; border: 1px solid #2d3148; border-radius: 6px; color: #e2e8f0; padding: 8px 12px; font-size: 13px; }
+    #search-results { position: absolute; bottom: 60px; left: 24px; right: 24px; background: #1a1d27; border: 1px solid #3b4270; border-radius: 8px; padding: 12px; display: none; max-height: 300px; overflow-y: auto; z-index: 10; }
+    .sr-item { padding: 8px 0; border-bottom: 1px solid #2d3148; font-size: 13px; color: #cbd5e1; }
+    .sr-item:last-child { border-bottom: none; }
+    .sr-meta { font-size: 11px; color: #94a3b8; }
+
+    .empty { color: #94a3b8; font-size: 13px; text-align: center; padding: 32px; }
+    #loading { text-align: center; padding: 60px; color: #94a3b8; flex: 1; }
+  </style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1><a href="/">sync_ai</a></h1>
+  <span id="session-title">Loading...</span>
+  <div id="status-dot" aria-label="Connection status"></div>
+  <button id="btn-deliver" onclick="deliverNow()" style="display:none">Send to Slack</button>
+  <button id="btn-end" onclick="endSession()" style="display:none">End Meeting</button>
+</div>
+
+<div id="loading">Loading session...</div>
+
+<div id="main" style="display:none;flex:1">
+  <div id="left">
+    <div id="transcript-header">Live Transcript</div>
+    <div id="transcript"><p class="empty">Waiting for transcript...</p></div>
+  </div>
+  <div id="right">
+    <div id="tabs" role="tablist">
+      <button class="tab active" role="tab" onclick="switchTab('suggestions')">Suggestions</button>
+      <button class="tab"        role="tab" onclick="switchTab('signals')">Signals</button>
+      <button class="tab"        role="tab" onclick="switchTab('actions')">Action Items</button>
+    </div>
+    <div id="tab-content" role="tabpanel"><p class="empty">Nothing yet</p></div>
+  </div>
+</div>
+
+<div id="search-bar" style="display:none">
+  <input id="search-input" placeholder="Search past meetings..." onkeydown="if(event.key==='Enter')doSearch()" />
+  <button onclick="doSearch()" style="background:#334155;color:#e2e8f0">Search</button>
+  <div id="search-results" aria-live="polite"></div>
+</div>
+
+<script>
+  let __clerk = null;
+  let meetingId = new URLSearchParams(location.search).get('id');
+  let ws = null;
+  let currentTab = 'suggestions';
+  const TAB_NAMES = ['suggestions', 'signals', 'actions'];
+  let appState = { suggestions: [], signals: [], action_items: [] };
+
+  async function apiFetch(url, options = {}) {
+    const token = await __clerk.session.getToken();
+    options.headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+    return fetch(url, options);
+  }
+
+  async function initApp() {
+    if (!meetingId) { window.location.href = '/'; return; }
+
+    const res = await apiFetch(`/sessions/${meetingId}`);
+    if (!res.ok) { window.location.href = '/'; return; }
+    const data = await res.json();
+
+    document.title = `sync_ai — ${data.title}`;
+    document.getElementById('session-title').textContent = data.title;
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('main').style.display = 'flex';
+    document.getElementById('search-bar').style.display = 'flex';
+
+    appState.suggestions = data.suggestions || [];
+    appState.signals = data.signals || [];
+    appState.action_items = data.action_items || [];
+    renderTab();
+
+    if (data.status === 'active') {
+      document.getElementById('status-dot').className = 'active';
+      document.getElementById('btn-end').style.display = '';
+      document.getElementById('btn-deliver').style.display = '';
+      connectWS();
+    }
+  }
+
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws/${meetingId}`);
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'transcript') {
+        appendTranscript(msg.data);
+      } else if (msg.type === 'suggestion') {
+        appState.suggestions.push(msg.data);
+        if (currentTab === 'suggestions') renderTab();
+      } else if (msg.type === 'signal') {
+        appState.signals.push(msg.data);
+        if (currentTab === 'signals') renderTab();
+      } else if (msg.type === 'action_item') {
+        appState.action_items.push(msg.data);
+        if (currentTab === 'actions') renderTab();
+      } else if (msg.type === 'meeting_ended') {
+        document.getElementById('status-dot').className = '';
+        document.getElementById('btn-end').style.display = 'none';
+      }
+    };
+    ws.onclose = () => { if (meetingId) setTimeout(connectWS, 2000); };
+  }
+
+  function appendTranscript(chunk) {
+    const box = document.getElementById('transcript');
+    const empty = box.querySelector('.empty');
+    if (empty) empty.remove();
+    const div = document.createElement('div');
+    div.className = 'chunk';
+    const speaker = document.createElement('div');
+    speaker.className = 'speaker';
+    speaker.textContent = chunk.speaker;
+    const text = document.createElement('div');
+    text.className = 'text';
+    text.textContent = chunk.text;
+    div.appendChild(speaker);
+    div.appendChild(text);
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab').forEach((el, i) => {
+      const isActive = TAB_NAMES[i] === tab;
+      el.className = 'tab' + (isActive ? ' active' : '');
+    });
+    renderTab();
+  }
+
+  function renderTab() {
+    const content = document.getElementById('tab-content');
+    content.innerHTML = '';
+    let items;
+    if (currentTab === 'suggestions') items = appState.suggestions;
+    else if (currentTab === 'signals') items = appState.signals;
+    else items = appState.action_items;
+
+    if (!items.length) { content.innerHTML = '<p class="empty">Nothing yet</p>'; return; }
+
+    items.slice().reverse().forEach(item => {
+      const div = document.createElement('div');
+      if (currentTab === 'suggestions') {
+        const t = item.suggestion_type || item.type || '';
+        div.className = 'card';
+        const label = document.createElement('div');
+        label.className = 'label ' + t;
+        label.textContent = t.replace('_', ' ');
+        const conf = document.createElement('span');
+        conf.className = 'conf';
+        conf.textContent = Math.round((item.confidence || 0) * 100) + '%';
+        label.appendChild(conf);
+        const body = document.createElement('div');
+        body.className = 'body';
+        body.textContent = item.text;
+        div.appendChild(label);
+        div.appendChild(body);
+      } else if (currentTab === 'signals') {
+        div.className = 'card';
+        const label = document.createElement('div');
+        label.className = 'label ' + item.signal_type;
+        label.textContent = item.signal_type;
+        const body = document.createElement('div');
+        body.className = 'body';
+        body.textContent = item.summary;
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = item.speaker;
+        div.appendChild(label);
+        div.appendChild(body);
+        div.appendChild(meta);
+      } else {
+        div.className = 'card' + (item.needs_review ? ' needs-review' : '');
+        const body = document.createElement('div');
+        body.className = 'body';
+        const strong = document.createElement('strong');
+        strong.textContent = item.task;
+        body.appendChild(strong);
+        if (item.needs_review) {
+          const flag = document.createElement('span');
+          flag.textContent = ' ⚠️ needs review';
+          body.appendChild(flag);
+        }
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = 'Owner: ' + (item.owner_name || 'Unassigned') + ' · Due: ' + (item.deadline || '—');
+        div.appendChild(body);
+        div.appendChild(meta);
+      }
+      content.appendChild(div);
+    });
+  }
+
+  async function endSession() {
+    if (!meetingId) return;
+    await apiFetch(`/sessions/${meetingId}`, { method: 'DELETE' });
+    meetingId = null;
+    if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    document.getElementById('btn-end').style.display = 'none';
+    document.getElementById('btn-deliver').style.display = 'none';
+    document.getElementById('status-dot').className = '';
+    document.getElementById('session-title').textContent = 'Session ended';
+  }
+
+  async function deliverNow() {
+    if (!meetingId) return;
+    const res = await apiFetch(`/sessions/${meetingId}/deliver`, { method: 'POST' });
+    const data = await res.json();
+    alert(data.status === 'delivery_queued' ? 'Queued for Slack delivery.' : 'Sent!');
+  }
+
+  async function doSearch() {
+    const q = document.getElementById('search-input').value.trim();
+    if (!q) return;
+    const res = await apiFetch(`/search?q=${encodeURIComponent(q)}&limit=5`);
+    const data = await res.json();
+    const box = document.getElementById('search-results');
+    box.style.display = 'block';
+    if (data.results.length) {
+      box.innerHTML = data.results.map(r =>
+        `<div class="sr-item"><div>${r.text}</div><div class="sr-meta">Meeting: ${r.meeting_id}</div></div>`
+      ).join('');
+    } else {
+      box.innerHTML = '<div class="sr-item">No results found.</div>';
+    }
+  }
+
+  // Boot Clerk
+  (async () => {
+    const configResp = await fetch('/config');
+    const { clerk_publishable_key } = await configResp.json();
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js';
+    script.onload = async () => {
+      const clerk = new window.Clerk(clerk_publishable_key);
+      await clerk.load();
+      __clerk = clerk;
+      if (!clerk.user) {
+        clerk.openSignIn({ afterSignInUrl: window.location.href });
+        return;
+      }
+      initApp();
+    };
+    document.head.appendChild(script);
+  })();
+</script>
+</body>
+</html>

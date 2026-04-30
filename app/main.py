@@ -1,28 +1,37 @@
+import asyncio
 import hashlib
 import hmac
 import logging
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import timedelta, timezone, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pathlib import Path
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
 
+import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from jose import jwt as pyjwt
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("sync_ai")
 
 load_dotenv()
 
+from app.auth.clerk import get_current_user
+from app.core.config import get_settings
 from app.core.search import semantic_search
 from app.core.session import MeetingSession
-from app.models.db import create_db_and_tables
+from app.models.db import User, UserIntegration, create_db_and_tables
 from app.repositories.action_item_repo import ActionItemRepository
 from app.repositories.meeting_repo import MeetingRepository
+from app.repositories.user_repo import UserRepository
 
 _SESSION_NOT_FOUND = "Session not found"
 
@@ -39,18 +48,29 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     os.makedirs("data", exist_ok=True)
+    # Run migration (idempotent — safe to run on every startup)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "python", "migrations/001_add_users.py",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+    except Exception:
+        pass
     create_db_and_tables()
-    # Warm up the embedding model so the first meeting doesn't stall 60s on model download
-    from app.core.search import _get_vectorstore
-    from app.core.config import get_settings
-    _settings = get_settings()
-    _get_vectorstore(_settings.embedding_model, _settings.chroma_persist_dir)
-    logger.info("embedding_model_loaded model=%s", _settings.embedding_model)
+    # Start calendar auto-join poller
+    from app.core.calendar_poller import poll_all_users_calendars
+    _poll_task = asyncio.create_task(poll_all_users_calendars(_sessions))
     yield
+    _poll_task.cancel()
+    await asyncio.gather(_poll_task, return_exceptions=True)
 
 
 app = FastAPI(title="sync_ai Meeting Copilot", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 # ── Request schemas ────────────────────────────────────────────────────────────
@@ -59,36 +79,86 @@ class StartSessionRequest(BaseModel):
     meeting_url: str
     title: str
     participant_emails: List[str] = []
-    slack_channel_id: Optional[str] = None  # overrides SLACK_CHANNEL_ID env var
+    slack_channel_id: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):
     item_id: str
     item_type: str  # "suggestion" | "action_item"
-    rating: int = Field(..., ge=-1, le=1)  # 1 = thumbs up, -1 = thumbs down
+    rating: int = Field(..., ge=-1, le=1)
 
 
-# ── Health ─────────────────────────────────────────────────────────────────────
+# ── Public routes (no auth) ───────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# ── Dashboard ──────────────────────────────────────────────────────────────────
+@app.get("/config")
+def get_public_config():
+    settings = get_settings()
+    return {"clerk_publishable_key": settings.clerk_publishable_key}
 
-_STATIC_DIR = Path(__file__).parent / "static"
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return (_STATIC_DIR / "index.html").read_text()
 
 
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page():
+    return (_STATIC_DIR / "settings.html").read_text()
+
+
+@app.get("/meeting", response_class=HTMLResponse)
+def meeting_page():
+    return (_STATIC_DIR / "meeting.html").read_text()
+
+
+# ── User ───────────────────────────────────────────────────────────────────────
+
+@app.get("/me")
+async def get_me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email, "name": current_user.name}
+
+
+@app.get("/integrations")
+async def get_integrations(current_user: User = Depends(get_current_user)):
+    repo = UserRepository()
+    return {
+        "slack": repo.get_integration(current_user.id, "slack") is not None,
+        "gmail": repo.get_integration(current_user.id, "gmail") is not None,
+        "google_calendar": repo.get_integration(current_user.id, "google_calendar") is not None,
+    }
+
+
+# ── Meetings list ──────────────────────────────────────────────────────────────
+
+@app.get("/meetings")
+def list_meetings(current_user: User = Depends(get_current_user)):
+    meetings = MeetingRepository().list_by_user(current_user.id)
+    return {"meetings": [
+        {"id": m.id, "title": m.title, "status": m.status,
+         "started_at": m.started_at.isoformat()}
+        for m in meetings
+    ]}
+
+
 # ── Sessions ───────────────────────────────────────────────────────────────────
 
 @app.post("/sessions", status_code=201)
-async def start_session(body: StartSessionRequest):
+async def start_session(
+    body: StartSessionRequest,
+    current_user: User = Depends(get_current_user),
+):
     meeting_id = str(uuid.uuid4())
+    settings = get_settings()
+
+    # Resolve per-user Slack token
+    user_repo = UserRepository()
+    slack_integration = user_repo.get_integration(current_user.id, "slack")
+    slack_token = slack_integration.access_token if slack_integration else settings.slack_bot_token or None
 
     session = MeetingSession(
         meeting_id=meeting_id,
@@ -96,8 +166,9 @@ async def start_session(body: StartSessionRequest):
         title=body.title,
         participant_emails=body.participant_emails,
         slack_channel_id=body.slack_channel_id,
+        slack_bot_token=slack_token,
+        user_id=current_user.id,
     )
-    # Start bot first — only persist to DB if Recall.ai accepts it
     await session.start()
 
     repo = MeetingRepository()
@@ -106,6 +177,7 @@ async def start_session(body: StartSessionRequest):
         title=body.title,
         platform_url=body.meeting_url,
         recall_bot_id=session.bot_id or "",
+        user_id=current_user.id,
         slack_channel_id=body.slack_channel_id,
     )
     repo.add_participants(meeting_id, body.participant_emails)
@@ -113,16 +185,16 @@ async def start_session(body: StartSessionRequest):
     _sessions[meeting_id] = session
     _ws_connections[meeting_id] = []
 
-    logger.info("session_started meeting_id=%s bot_id=%s", meeting_id, session.bot_id)
+    logger.info("session_started meeting_id=%s user_id=%s bot_id=%s",
+                meeting_id, current_user.id, session.bot_id)
     return {"meeting_id": meeting_id, "bot_id": session.bot_id, "status": "active"}
 
 
 @app.get("/sessions/{meeting_id}")
-def get_session(meeting_id: str):
-    meeting = MeetingRepository().get(meeting_id)
+def get_session(meeting_id: str, current_user: User = Depends(get_current_user)):
+    meeting = MeetingRepository().get(meeting_id, user_id=current_user.id)
     if not meeting:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
-    # In-memory state may be absent after a server restart; fall back gracefully
     session = _sessions.get(meeting_id)
     state = session.get_state() if session else {}
     return {
@@ -137,66 +209,83 @@ def get_session(meeting_id: str):
 
 
 @app.delete("/sessions/{meeting_id}")
-async def end_session(meeting_id: str):
+async def end_session(meeting_id: str, current_user: User = Depends(get_current_user)):
     session = _sessions.get(meeting_id)
     if not session:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
+    if session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your session")
     await session.stop()
     del _sessions[meeting_id]
 
     MeetingRepository().mark_ended(meeting_id)
-    logger.info("session_ended meeting_id=%s", meeting_id)
+    logger.info("session_ended meeting_id=%s user_id=%s", meeting_id, current_user.id)
 
     await _broadcast(meeting_id, {"type": "meeting_ended", "data": {}})
     return {"status": "ended"}
 
 
 @app.get("/sessions/{meeting_id}/suggestions")
-def get_suggestions(meeting_id: str):
+def get_suggestions(meeting_id: str, current_user: User = Depends(get_current_user)):
     session = _sessions.get(meeting_id)
-    if not session:
+    if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
     return {"suggestions": session.get_state()["suggestions"][-10:]}
 
 
 @app.get("/sessions/{meeting_id}/signals")
-def get_signals(meeting_id: str):
+def get_signals(meeting_id: str, current_user: User = Depends(get_current_user)):
     session = _sessions.get(meeting_id)
-    if not session:
+    if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
     return {"signals": session.get_state()["signals"]}
 
 
 @app.get("/sessions/{meeting_id}/action-items")
-def get_action_items(meeting_id: str):
+def get_action_items(meeting_id: str, current_user: User = Depends(get_current_user)):
     session = _sessions.get(meeting_id)
     if session:
+        if session.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
         return {"action_items": session.get_state()["action_items"]}
-    # Session not in memory (e.g. server restarted) — read from DB
-    if not MeetingRepository().get(meeting_id):
+    if not MeetingRepository().get(meeting_id, user_id=current_user.id):
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
     return {"action_items": [dict(i) for i in ActionItemRepository().list_by_meeting(meeting_id)]}
 
 
 @app.post("/sessions/{meeting_id}/deliver")
-async def trigger_delivery(meeting_id: str):
-    import asyncio
+async def trigger_delivery(meeting_id: str, current_user: User = Depends(get_current_user)):
     from app.agents.delivery import run_delivery_node
     session = _sessions.get(meeting_id)
-    if not session:
+    if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
     state = session.get_state()
     title = session.title
     slack_channel_id = session._slack_channel_id
+    slack_bot_token = session._slack_bot_token
+    # Resolve per-user Gmail integration
+    gmail_integration = UserRepository().get_integration(current_user.id, "gmail")
     asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: run_delivery_node(state, meeting_title=title, slack_channel_id=slack_channel_id),
+        lambda: run_delivery_node(
+            state,
+            meeting_title=title,
+            slack_channel_id=slack_channel_id,
+            slack_bot_token=slack_bot_token,
+            gmail_integration=gmail_integration,
+        ),
     )
     return {"status": "delivery_queued"}
 
 
 @app.post("/sessions/{meeting_id}/feedback")
-def submit_feedback(meeting_id: str, body: FeedbackRequest):
+def submit_feedback(
+    meeting_id: str,
+    body: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+):
+    if not MeetingRepository().get(meeting_id, user_id=current_user.id):
+        raise HTTPException(status_code=404, detail=_SESSION_NOT_FOUND)
     if body.item_type == "action_item":
         repo = ActionItemRepository()
         items = repo.list_by_meeting(meeting_id)
@@ -208,31 +297,144 @@ def submit_feedback(meeting_id: str, body: FeedbackRequest):
 
 
 @app.get("/sessions/{meeting_id}/trace")
-def get_trace_url(meeting_id: str):
-    trace_url = MeetingRepository().get_trace_url(meeting_id)
-    if trace_url is None and not MeetingRepository().get(meeting_id):
+def get_trace_url(meeting_id: str, current_user: User = Depends(get_current_user)):
+    meeting = MeetingRepository().get(meeting_id, user_id=current_user.id)
+    if not meeting:
         raise HTTPException(status_code=404, detail="Not found")
-    return {"trace_url": trace_url}
+    return {"trace_url": meeting.langsmith_trace_url}
 
 
 # ── Search ─────────────────────────────────────────────────────────────────────
 
 @app.get("/search")
-def search(q: str, limit: int = Query(default=5, ge=1, le=50)):
-    return {"results": semantic_search(q, limit=limit)}
+def search(
+    q: str,
+    limit: int = Query(default=5, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+):
+    return {"results": semantic_search(q, user_id=current_user.id, limit=limit)}
+
+
+# ── Slack OAuth ────────────────────────────────────────────────────────────────
+
+@app.get("/auth/slack")
+async def slack_oauth_start(current_user: User = Depends(get_current_user)):
+    settings = get_settings()
+    state = pyjwt.encode(
+        {"user_id": current_user.id, "exp": time.time() + 600},
+        settings.clerk_secret_key, algorithm="HS256",
+    )
+    url = (
+        "https://slack.com/oauth/v2/authorize"
+        f"?client_id={settings.slack_client_id}"
+        "&scope=chat:write,chat:write.public,channels:read"
+        f"&redirect_uri={settings.slack_oauth_redirect_uri}"
+        f"&state={state}"
+    )
+    return RedirectResponse(url)
+
+
+@app.get("/auth/slack/callback")
+async def slack_oauth_callback(code: str, state: str):
+    settings = get_settings()
+    try:
+        claims = pyjwt.decode(state, settings.clerk_secret_key, algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid state")
+    user_id = claims["user_id"]
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                "code": code,
+                "client_id": settings.slack_client_id,
+                "client_secret": settings.slack_client_secret,
+                "redirect_uri": settings.slack_oauth_redirect_uri,
+            },
+        )
+    data = resp.json()
+    if not data.get("ok"):
+        raise HTTPException(status_code=400, detail=f"Slack OAuth failed: {data.get('error')}")
+    UserRepository().upsert_integration(
+        user_id=user_id,
+        provider="slack",
+        access_token=data["access_token"],
+        team_id=data["team"]["id"],
+    )
+    logger.info("slack_connected user_id=%s team_id=%s", user_id, data["team"]["id"])
+    return RedirectResponse("/settings?connected=slack")
+
+
+# ── Google OAuth (Gmail + Calendar) ───────────────────────────────────────────
+
+@app.get("/auth/google")
+async def google_oauth_start(current_user: User = Depends(get_current_user)):
+    settings = get_settings()
+    state = pyjwt.encode(
+        {"user_id": current_user.id, "exp": time.time() + 600},
+        settings.clerk_secret_key, algorithm="HS256",
+    )
+    scopes = " ".join([
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    ])
+    url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={settings.google_client_id}"
+        "&response_type=code"
+        f"&redirect_uri={settings.google_oauth_redirect_uri}"
+        f"&scope={scopes}"
+        "&access_type=offline&prompt=consent"
+        f"&state={state}"
+    )
+    return RedirectResponse(url)
+
+
+@app.get("/auth/google/callback")
+async def google_oauth_callback(code: str, state: str):
+    settings = get_settings()
+    try:
+        claims = pyjwt.decode(state, settings.clerk_secret_key, algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid state")
+    user_id = claims["user_id"]
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "redirect_uri": settings.google_oauth_redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+    data = resp.json()
+    if "error" in data:
+        raise HTTPException(status_code=400, detail=f"Google OAuth failed: {data['error']}")
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))
+    repo = UserRepository()
+    for provider in ["gmail", "google_calendar"]:
+        repo.upsert_integration(
+            user_id=user_id,
+            provider=provider,
+            access_token=data["access_token"],
+            refresh_token=data.get("refresh_token", ""),
+            token_expires_at=expires_at,
+        )
+    logger.info("google_connected user_id=%s", user_id)
+    return RedirectResponse("/settings?connected=google")
 
 
 # ── Recall.ai webhook ──────────────────────────────────────────────────────────
 
 def _verify_recall_signature(request_body: bytes, signature_header: str, secret: str) -> bool:
-    """Verify Recall.ai HMAC-SHA256 webhook signature."""
     expected = hmac.new(secret.encode(), request_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature_header)
 
 
 @app.post("/webhook/recall/{meeting_id}")
 async def recall_webhook(meeting_id: str, request: Request, payload: Dict[str, Any]):
-    from app.core.config import get_settings
     settings = get_settings()
     if settings.recall_webhook_secret:
         sig = request.headers.get("X-Recall-Signature", "")
@@ -255,7 +457,6 @@ async def recall_webhook(meeting_id: str, request: Request, payload: Dict[str, A
     timestamp = words[0].get("start_time", 0.0)
     speaker_label = f"Speaker {speaker_id}"
 
-    import asyncio
     state_before = session.get_state()
     await asyncio.get_running_loop().run_in_executor(
         None, lambda: session.ingest_chunk(speaker=speaker_label, text=text, timestamp=timestamp)
@@ -266,13 +467,10 @@ async def recall_webhook(meeting_id: str, request: Request, payload: Dict[str, A
         "type": "transcript",
         "data": {"speaker": speaker_label, "text": text, "timestamp": timestamp},
     })
-
     for s in state_after["suggestions"][len(state_before["suggestions"]):]:
         await _broadcast(meeting_id, {"type": "suggestion", "data": dict(s)})
-
     for sig in state_after["signals"][len(state_before["signals"]):]:
         await _broadcast(meeting_id, {"type": "signal", "data": dict(sig)})
-
     for item in state_after["action_items"][len(state_before["action_items"]):]:
         await _broadcast(meeting_id, {"type": "action_item", "data": dict(item)})
 

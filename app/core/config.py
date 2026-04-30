@@ -24,12 +24,31 @@ class Settings(BaseSettings):
     langsmith_signal_dataset: str = "sync_ai-signal-detection"
     langsmith_extraction_dataset: str = "sync_ai-action-extraction"
 
-    # Slack
+    # Clerk auth
+    clerk_secret_key: str = ""
+    clerk_publishable_key: str = ""
+    clerk_frontend_api: str = ""   # e.g. "clerk.your-domain.com"
+
+    # Slack (legacy single-tenant fallback — replaced by per-user OAuth tokens)
     slack_bot_token: str = ""
     slack_channel_id: str = ""
 
-    # Gmail
+    # Slack OAuth app (for per-user "Add to Slack" flow)
+    slack_client_id: str = ""
+    slack_client_secret: str = ""
+    slack_oauth_redirect_uri: str = ""
+
+    # Google OAuth app (Gmail send + Calendar read — one app, two scopes)
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+
+    # Gmail (legacy single-tenant fallback — replaced by per-user Google OAuth)
     gmail_credentials_json: str = ""
+
+    # Google Calendar auto-join
+    calendar_poll_interval_seconds: int = 300    # poll every 5 minutes
+    calendar_bot_dispatch_offset_seconds: int = 120  # join 2 min before start
 
     # Database
     database_url: str = "./data/sync_ai.db"

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 def client():
     with patch("app.core.session.RecallClient") as MockRecall, \
          patch("app.core.session.chromadb"), \
-         patch("app.core.session.HuggingFaceEmbeddings"), \
+         patch("app.core.session.HuggingFaceInferenceAPIEmbeddings"), \
          patch("app.core.session.get_engine"), \
          patch("app.repositories.meeting_repo.get_engine"), \
          patch("app.repositories.transcript_repo.get_engine"), \

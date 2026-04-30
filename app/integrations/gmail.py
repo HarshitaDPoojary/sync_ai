@@ -1,24 +1,29 @@
 import base64
-import json
 from email.mime.text import MIMEText
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from app.core.config import get_settings
-
-
-def _get_gmail_service():
-    settings = get_settings()
-    if not settings.gmail_credentials_json:
-        return None
-    creds_json = json.loads(base64.b64decode(settings.gmail_credentials_json).decode())
-    creds = Credentials.from_authorized_user_info(creds_json)
-    return build("gmail", "v1", credentials=creds)
-
 
 class GmailClient:
+    def __init__(
+        self,
+        access_token: str,
+        refresh_token: str,
+        client_id: str,
+        client_secret: str,
+        token_uri: str = "https://oauth2.googleapis.com/token",
+    ):
+        creds = Credentials(
+            token=access_token,
+            refresh_token=refresh_token,
+            token_uri=token_uri,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        self._service = build("gmail", "v1", credentials=creds)
+
     def send_action_items(
         self,
         to_email: str,
@@ -26,9 +31,6 @@ class GmailClient:
         meeting_title: str,
         items: List[Dict[str, Any]],
     ) -> None:
-        service = _get_gmail_service()
-        if service is None:
-            return
         lines = [f"Hi {owner_name},\n\nYour action items from '{meeting_title}':\n"]
         for item in items:
             deadline = item.get("deadline") or "No deadline"
@@ -39,4 +41,4 @@ class GmailClient:
         message["to"] = to_email
         message["subject"] = f"Action Items: {meeting_title}"
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        self._service.users().messages().send(userId="me", body={"raw": raw}).execute()

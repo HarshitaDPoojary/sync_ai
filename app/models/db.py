@@ -8,6 +8,28 @@ from sqlmodel import Field, SQLModel, create_engine
 from app.core.config import get_settings
 
 
+class User(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    clerk_user_id: str = Field(unique=True, index=True)
+    email: str = Field(index=True)
+    name: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UserIntegration(SQLModel, table=True):
+    id: str = Field(primary_key=True)
+    user_id: str = Field(foreign_key="user.id", index=True)
+    provider: str           # "slack" | "gmail" | "google_calendar"
+    access_token: str = ""
+    refresh_token: str = ""
+    token_expires_at: Optional[datetime] = None
+    team_id: Optional[str] = None       # Slack workspace ID
+    channel_id: Optional[str] = None    # Slack default channel
+    extra_json: str = "{}"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class Meeting(SQLModel, table=True):
     id: str = Field(primary_key=True)
     title: str
@@ -18,6 +40,7 @@ class Meeting(SQLModel, table=True):
     recall_bot_id: str
     langsmith_trace_url: Optional[str] = None
     slack_channel_id: Optional[str] = None
+    user_id: Optional[str] = Field(default=None, foreign_key="user.id", index=True)
 
 
 class Participant(SQLModel, table=True):
@@ -71,6 +94,16 @@ class MeetingSummary(SQLModel, table=True):
     @property
     def next_steps(self) -> List[str]:
         return json.loads(self.next_steps_json)
+
+
+class CalendarEvent(SQLModel, table=True):
+    id: str = Field(primary_key=True)   # Google calendar event id
+    user_id: str = Field(foreign_key="user.id", index=True)
+    title: str
+    meeting_url: Optional[str] = None
+    start_time: datetime
+    bot_dispatched: bool = False
+    meeting_id: Optional[str] = Field(default=None, foreign_key="meeting.id")
 
 
 def create_db_and_tables(engine=None):
